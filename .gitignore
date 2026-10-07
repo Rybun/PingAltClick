@@ -1,0 +1,3 @@
+.release/
+*.bak
+.DS_Store
