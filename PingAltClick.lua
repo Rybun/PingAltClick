@@ -15,8 +15,13 @@
 -- Marcos de unidad fuera de combate: mientras Alt está pulsado se desactivan sus
 -- clics (el movimiento del ratón no), así que el clic cae al mundo, salta la
 -- asignación ALT-BUTTON1 y el juego detecta el marco bajo el cursor igual que con la
--- tecla de ping, rueda radial incluida. En combate eso está bloqueado, así que se
--- usa el /ping del fragmento seguro (solo ping contextual).
+-- tecla de ping, rueda radial incluida.
+--
+-- En combate SetMouseClickEnabled está bloqueado. Con la opción "Igual en combate"
+-- (activada por defecto) un controlador de estado seguro ([mod:alt]) desactiva el
+-- ratón de esos marcos con EnableMouse, que sí está permitido en código seguro, y
+-- el resultado es el mismo. Sin la opción, en combate se usa el /ping del
+-- fragmento seguro (solo ping contextual).
 local KEY = "ALT-BUTTON1"
 local ACTION = "TOGGLEPINGLISTENER"
 local PING_MODE_KEY_DOWN = Enum.PingMode and Enum.PingMode.KeyDown or 0
@@ -26,8 +31,62 @@ local PING_CMD = SLASH_PING1 or "/ping"
 local MACRO_ACTION = PING_CMD
 local MACRO_UNIT = PING_CMD
 
+local DEFAULTS = {
+    combatWheel = true,
+}
+
+local L = {
+    COMBAT_WHEEL = "Same in combat",
+    COMBAT_WHEEL_TOOLTIP = "Alt + Left Click on unit frames works the same in and out of combat: quick click for a contextual ping, hold for the radial wheel.\n\nWhen disabled, in combat Alt + Left Click on unit frames only sends a contextual ping.",
+    APPLY_AFTER_COMBAT = "The change will be applied when combat ends.",
+}
+if GetLocale() == "esES" or GetLocale() == "esMX" then
+    L.COMBAT_WHEEL = "Igual en combate"
+    L.COMBAT_WHEEL_TOOLTIP = "Alt + clic izquierdo en los marcos de unidad funciona igual dentro y fuera de combate: clic rápido para ping contextual, mantener para la rueda.\n\nSi se desactiva, en combate Alt + clic izquierdo en los marcos de unidad solo hace ping contextual."
+    L.APPLY_AFTER_COMBAT = "El cambio se aplicará al salir de combate."
+end
+
+local db
+
 local f = CreateFrame("Frame")
-local header = CreateFrame("Frame", "PingAltClickHeader", UIParent, "SecureHandlerBaseTemplate")
+local header = CreateFrame("Frame", "PingAltClickHeader", UIParent, "SecureHandlerStateTemplate")
+header:SetAttribute("nunits", 0)
+-- Alt en combate (opción "Igual en combate"): el clic de los marcos de unidad pasa al mundo
+header:SetAttribute("_onstate-pingalt", [[
+    local total = self:GetAttribute("nunits") or 0
+    local count, missing = 0, 0
+    local enable = tostring(newstate) ~= "1"
+    if not enable and not (self:GetAttribute("combat-wheel") and PlayerInCombat()) then
+        total = 0
+    end
+    for i = 1, total do
+        local frame = self:GetFrameRef("unit" .. i)
+        if frame then
+            if enable then
+                if self:GetAttribute("disabled" .. i) then
+                    frame:EnableMouse(true)
+                    self:SetAttribute("disabled" .. i, nil)
+                    count = count + 1
+                end
+            elseif not self:GetAttribute("disabled" .. i) then
+                -- Los marcos de unidad siempre tienen el ratón activo
+                frame:EnableMouse(false)
+                self:SetAttribute("disabled" .. i, true)
+                count = count + 1
+            end
+        else
+            missing = missing + 1
+        end
+    end
+    if self:GetAttribute("debug") then
+        self:CallMethod("DebugState", newstate, self:GetAttribute("combat-wheel"), PlayerInCombat(), total, count, missing)
+    end
+]])
+function header:DebugState(state, combatWheel, inCombat, total, count, missing)
+    print(("|cff33ff99PingAltClick|r estado=%s opción=%s combate=%s marcos=%s cambiados=%s sin-ref=%s"):format(
+        tostring(state), tostring(combatWheel), tostring(inCombat), tostring(total), tostring(count), tostring(missing)))
+end
+RegisterStateDriver(header, "pingalt", "[mod:alt] 1; 0")
 local wrapped = {}
 local pending = {}
 local unitFrames = {}
@@ -73,10 +132,18 @@ local function hookActionButtons()
     end
 end
 
+local secureUnits = {}
+
 local function hookUnit(frame)
     if not frame then return end
     unitFrames[frame] = true
     hook(frame, MACRO_UNIT)
+    if not secureUnits[frame] and wrapped[frame] and not InCombatLockdown() then
+        local n = header:GetAttribute("nunits") + 1
+        secureUnits[frame] = n
+        header:SetFrameRef("unit" .. n, frame)
+        header:SetAttribute("nunits", n)
+    end
 end
 
 local function hookUnitFrames()
@@ -141,12 +208,44 @@ mod:RegisterEvent("PLAYER_REGEN_DISABLED")
 mod:RegisterEvent("PLAYER_REGEN_ENABLED")
 mod:SetScript("OnEvent", function(_, event)
     if event == "PLAYER_REGEN_DISABLED" then
-        -- Última ocasión antes del bloqueo de combate
+        -- Última ocasión antes del bloqueo de combate. Si Alt sigue pulsado, se
+        -- fuerza al controlador seguro a reevaluar para que tome el relevo.
         restoreUnitClicks()
+        -- Sincroniza la opción por si el aviso de cambio del panel no llegó
+        header:SetAttribute("combat-wheel", db and db.combatWheel and true or nil)
+        header:SetAttribute("state-pingalt", "0")
     else
         updateUnitClicks()
     end
 end)
+
+local function applyOptions()
+    if InCombatLockdown() then
+        f:RegisterEvent("PLAYER_REGEN_ENABLED")
+        return
+    end
+    header:SetAttribute("combat-wheel", db.combatWheel and true or nil)
+end
+
+local function setupOptions()
+    if not (Settings and Settings.RegisterVerticalLayoutCategory) then return end
+    local category = Settings.RegisterVerticalLayoutCategory("PingAltClick")
+    local setting = Settings.RegisterAddOnSetting(category, "PingAltClick_CombatWheel", "combatWheel",
+        db, Settings.VarType and Settings.VarType.Boolean or "boolean", L.COMBAT_WHEEL, DEFAULTS.combatWheel)
+    Settings.CreateCheckbox(category, setting, L.COMBAT_WHEEL_TOOLTIP)
+    local function onChanged()
+        if InCombatLockdown() then
+            print("|cff33ff99PingAltClick|r: " .. L.APPLY_AFTER_COMBAT)
+        end
+        applyOptions()
+    end
+    if setting.SetValueChangedCallback then
+        setting:SetValueChangedCallback(onChanged)
+    else
+        Settings.SetOnValueChangedCallback("PingAltClick_CombatWheel", onChanged)
+    end
+    Settings.RegisterAddOnCategory(category)
+end
 
 local function applyAll()
     hookActionButtons()
@@ -160,11 +259,23 @@ f:SetScript("OnEvent", function(self, event)
     if event == "PLAYER_REGEN_ENABLED" then
         self:UnregisterEvent("PLAYER_REGEN_ENABLED")
         applyBinding()
+        applyOptions()
         for frame, macro in pairs(pending) do
             pending[frame] = nil
-            hook(frame, macro)
+            if unitFrames[frame] then
+                hookUnit(frame)
+            else
+                hook(frame, macro)
+            end
         end
     elseif event == "PLAYER_LOGIN" then
+        PingAltClickDB = PingAltClickDB or {}
+        db = PingAltClickDB
+        for k, v in pairs(DEFAULTS) do
+            if db[k] == nil then db[k] = v end
+        end
+        setupOptions()
+        applyOptions()
         applyBinding()
         applyAll()
         local LAB = LibStub and LibStub("LibActionButton-1.0", true)
@@ -180,14 +291,27 @@ end)
 
 -- /pingalt: diagnóstico. Pon el ratón sobre un botón o marco y escribe /pingalt
 SLASH_PINGALTCLICK1 = "/pingalt"
-SlashCmdList.PINGALTCLICK = function()
+SlashCmdList.PINGALTCLICK = function(msg)
+    if msg and msg:lower():match("^%s*debug") then
+        if InCombatLockdown() then
+            print("|cff33ff99PingAltClick|r: " .. L.APPLY_AFTER_COMBAT)
+            return
+        end
+        local on = not header:GetAttribute("debug")
+        header:SetAttribute("debug", on or nil)
+        print("|cff33ff99PingAltClick|r debug: " .. (on and "ON" or "OFF"))
+        return
+    end
     print("|cff33ff99PingAltClick|r")
     print("  " .. KEY .. " -> " .. tostring(GetBindingAction(KEY, true)))
     print("  pingMode = " .. tostring(GetCVar("pingMode")) .. ", enablePings = " .. tostring(GetCVar("enablePings")))
     print("  Tecla de ping actual: " .. tostring(GetBindingKey(ACTION)))
+    print(("  Igual en combate: opción=%s, aplicada=%s, en combate=%s"):format(
+        tostring(db and db.combatWheel), tostring(header:GetAttribute("combat-wheel")),
+        tostring(InCombatLockdown())))
     local count = 0
     for _ in pairs(wrapped) do count = count + 1 end
-    print("  Marcos enganchados: " .. count)
+    print("  Marcos enganchados: " .. count .. ", marcos de unidad (combate): " .. tostring(header:GetAttribute("nunits")))
 
     local foci = GetMouseFoci and GetMouseFoci() or { GetMouseFocus and GetMouseFocus() }
     local frame = foci and foci[1]
