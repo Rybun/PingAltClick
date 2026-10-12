@@ -93,7 +93,9 @@ local unitFrames = {}
 local clickDisabled = {}
 
 local PRE_CLICK = [[
-    if button == "LeftButton" and IsAltKeyDown() then
+    -- keybinds (e.g. Alt+1 on a paged bar) also arrive as LeftButton clicks;
+    -- only treat it as a ping when the cursor is actually over the button
+    if button == "LeftButton" and IsAltKeyDown() and self:IsUnderMouse(true) then
         return "pingalt"
     end
 ]]

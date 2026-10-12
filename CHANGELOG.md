@@ -1,5 +1,8 @@
 # Changelog
 
+## 2.4.1
+- Fixed: Alt + number keybinds on paged action bars (e.g. Dominos) were turned into pings instead of casting. Only real mouse clicks over the button ping now.
+
 ## 2.4
 - New options panel in **Options → AddOns → PingAltClick**.
 - New option **Same in combat** (enabled by default): Alt + Left Click on unit frames opens the radial ping wheel in combat too, through a secure state driver.

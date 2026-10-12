@@ -1,7 +1,7 @@
 ## Interface: 16001
 ## Title: PingAltClick
 ## Notes: Alt + clic izquierdo usa el sistema de pings normal (clic = ping contextual, mantener = rueda)
-## Version: 2.4
+## Version: 2.4.1
 ## IconTexture: Interface\AddOns\PingAltClick\icon
 ## Author: Rybun
 ## X-License: MIT
