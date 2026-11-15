@@ -20,11 +20,10 @@
 -- salta la asignación y el juego detecta el marco bajo el cursor igual que con la
 -- tecla de ping, rueda radial incluida.
 --
--- En combate SetMouseClickEnabled está bloqueado. Con la opción "Igual en combate"
--- (activada por defecto) un controlador de estado seguro ([mod:...]) desactiva el
--- ratón de esos marcos con EnableMouse, que sí está permitido en código seguro, y
--- el resultado es el mismo. Sin la opción, en combate se usa el /ping del
--- fragmento seguro (solo ping contextual).
+-- En combate SetMouseClickEnabled y SetPassThroughButtons están bloqueados, así que
+-- un controlador de estado seguro ([mod:...]) desactiva el ratón de esos marcos con
+-- EnableMouse, que sí está permitido en código seguro, y el resultado es el mismo:
+-- el ping funciona igual dentro y fuera de combate.
 local ACTION = "TOGGLEPINGLISTENER"
 local PING_MODE_KEY_DOWN = Enum.PingMode and Enum.PingMode.KeyDown or 0
 local PING_CMD = SLASH_PING1 or "/ping"
@@ -34,46 +33,54 @@ local MACRO_ACTION = PING_CMD
 local MACRO_UNIT = PING_CMD
 
 local DEFAULTS = {
-    combatWheel = true,
     modifier = "ALT",
     button = "LeftButton",
 }
 
--- Orden canónico de los modificadores en las asignaciones de WoW: ALT-CTRL-SHIFT
-local MODIFIERS = { "ALT", "CTRL", "SHIFT", "ALT-CTRL", "ALT-SHIFT", "CTRL-SHIFT" }
-local BUTTONS = { "LeftButton", "RightButton" }
-local BUTTON_KEYS = { LeftButton = "BUTTON1", RightButton = "BUTTON2" }
+-- Orden canónico de los modificadores en las asignaciones de WoW: ALT-CTRL-SHIFT.
+-- "NONE" (sin modificador) solo se permite con los botones 3-5.
+local MODIFIERS = { "ALT", "CTRL", "SHIFT", "ALT-CTRL", "ALT-SHIFT", "CTRL-SHIFT", "NONE" }
+local BUTTONS = { "LeftButton", "RightButton", "MiddleButton", "Button4", "Button5" }
+local BUTTON_KEYS = {
+    LeftButton = "BUTTON1", RightButton = "BUTTON2", MiddleButton = "BUTTON3",
+    Button4 = "BUTTON4", Button5 = "BUTTON5",
+}
+-- Botones que no pueden ir sin modificador (romperían el clic normal)
+local NEEDS_MODIFIER = { LeftButton = true, RightButton = true }
 
 local L = {
-    ALT = "Alt", CTRL = "Ctrl", SHIFT = "Shift",
-    LeftButton = "Left Click", RightButton = "Right Click",
+    ALT = "Alt", CTRL = "Ctrl", SHIFT = "Shift", NONE = "None (buttons 3-5 only)",
+    LeftButton = "Left Click", RightButton = "Right Click", MiddleButton = "Middle Button",
+    Button4 = "Mouse Button 4", Button5 = "Mouse Button 5",
     MODIFIER = "Modifier",
-    MODIFIER_TOOLTIP = "Key to hold while clicking to ping. It must match exactly: with Alt selected, Ctrl + Alt + click is left alone for other addons.",
+    MODIFIER_TOOLTIP = "Key to hold while clicking to ping. It must match exactly: with Alt selected, Ctrl + Alt + click is left alone for other addons.\n\n\"None\" is only available with the middle button and buttons 4 and 5.",
     BUTTON = "Mouse button",
     BUTTON_TOOLTIP = "Mouse button used to ping while holding the modifier.",
+    NONE_ADJUSTED = "No modifier only works with the middle button or buttons 4 and 5. Adjusted to: %s",
     CURRENT = "Ping with: |cffffd100%s|r",
     CONFLICT = "|cffff8040%s|r was bound to \"%s\". PingAltClick takes priority over it.",
     RESET = "Reset",
-    COMBAT_WHEEL = "Same in combat",
-    COMBAT_WHEEL_TOOLTIP = "Pinging on unit frames works the same in and out of combat: quick click for a contextual ping, hold for the radial wheel.\n\nWhen disabled, in combat a ping click on unit frames only sends a contextual ping.",
     APPLY_AFTER_COMBAT = "The change will be applied when combat ends.",
-    USAGE = "Usage: /pingac (window), /pingac <alt|ctrl|shift|ctrl+alt...> <left|right>, /pingac reset",
+    USAGE = "Usage: /pingac (window), /pingac <alt|ctrl|shift|ctrl+alt...|none> <left|right|middle|4|5>, /pingac reset",
 }
 if GetLocale() == "esES" or GetLocale() == "esMX" then
     L.SHIFT = "Mayús"
+    L.NONE = "Ninguno (solo botones 3-5)"
     L.LeftButton = "Clic izquierdo"
     L.RightButton = "Clic derecho"
+    L.MiddleButton = "Botón central"
+    L.Button4 = "Botón 4 del ratón"
+    L.Button5 = "Botón 5 del ratón"
     L.MODIFIER = "Modificador"
-    L.MODIFIER_TOOLTIP = "Tecla que hay que mantener al hacer clic para hacer ping. Tiene que coincidir exactamente: con Alt elegido, Ctrl + Alt + clic queda libre para otros addons."
+    L.MODIFIER_TOOLTIP = "Tecla que hay que mantener al hacer clic para hacer ping. Tiene que coincidir exactamente: con Alt elegido, Ctrl + Alt + clic queda libre para otros addons.\n\n\"Ninguno\" solo está disponible con el botón central y los botones 4 y 5."
     L.BUTTON = "Botón del ratón"
     L.BUTTON_TOOLTIP = "Botón del ratón con el que se hace ping mientras mantienes el modificador."
+    L.NONE_ADJUSTED = "Sin modificador solo funciona con el botón central o los botones 4 y 5. Ajustado a: %s"
     L.CURRENT = "Ping con: |cffffd100%s|r"
     L.CONFLICT = "|cffff8040%s|r estaba asignado a \"%s\". PingAltClick tiene prioridad."
     L.RESET = "Restablecer"
-    L.COMBAT_WHEEL = "Igual en combate"
-    L.COMBAT_WHEEL_TOOLTIP = "Hacer ping en los marcos de unidad funciona igual dentro y fuera de combate: clic rápido para ping contextual, mantener para la rueda.\n\nSi se desactiva, en combate el clic de ping en los marcos de unidad solo hace ping contextual."
     L.APPLY_AFTER_COMBAT = "El cambio se aplicará al salir de combate."
-    L.USAGE = "Uso: /pingac (ventana), /pingac <alt|ctrl|shift|ctrl+alt...> <izq|der>, /pingac reset"
+    L.USAGE = "Uso: /pingac (ventana), /pingac <alt|ctrl|shift|ctrl+alt...|ninguno> <izq|der|central|4|5>, /pingac reset"
 end
 
 local db
@@ -86,11 +93,17 @@ local function hasMod(part)
     return ("-" .. cfg().modifier .. "-"):find("-" .. part .. "-", 1, true) ~= nil
 end
 
+local function noModifier()
+    return cfg().modifier == "NONE"
+end
+
 local function bindingKey()
+    if noModifier() then return BUTTON_KEYS[cfg().button] end
     return cfg().modifier .. "-" .. BUTTON_KEYS[cfg().button]
 end
 
 local function modifierText(m)
+    if m == "NONE" then return L.NONE end
     local parts = {}
     for part in m:gmatch("[^-]+") do
         parts[#parts + 1] = L[part] or part
@@ -99,11 +112,14 @@ local function modifierText(m)
 end
 
 local function comboText()
+    if noModifier() then return L[cfg().button] end
     return modifierText(cfg().modifier) .. " + " .. L[cfg().button]:lower()
 end
 
--- Condición del controlador de estado: el modificador exacto, sin los demás
+-- Condición del controlador de estado: el modificador exacto, sin los demás.
+-- Sin modificador no hace falta: los marcos dejan pasar ese botón todo el rato.
 local function stateCondition()
+    if noModifier() then return "0" end
     local c = {}
     for _, part in ipairs({ "ALT", "CTRL", "SHIFT" }) do
         c[#c + 1] = (hasMod(part) and "mod:" or "nomod:") .. part:lower()
@@ -120,13 +136,12 @@ end
 local f = CreateFrame("Frame")
 local header = CreateFrame("Frame", "PingAltClickHeader", UIParent, "SecureHandlerStateTemplate")
 header:SetAttribute("nunits", 0)
--- Modificador pulsado en combate (opción "Igual en combate"): el clic de los marcos
--- de unidad pasa al mundo
+-- Modificador pulsado en combate: el clic de los marcos de unidad pasa al mundo
 header:SetAttribute("_onstate-pingalt", [[
     local total = self:GetAttribute("nunits") or 0
     local count, missing = 0, 0
     local enable = tostring(newstate) ~= "1"
-    if not enable and not (self:GetAttribute("combat-wheel") and PlayerInCombat()) then
+    if not enable and not PlayerInCombat() then
         total = 0
     end
     for i = 1, total do
@@ -149,12 +164,12 @@ header:SetAttribute("_onstate-pingalt", [[
         end
     end
     if self:GetAttribute("debug") then
-        self:CallMethod("DebugState", newstate, self:GetAttribute("combat-wheel"), PlayerInCombat(), total, count, missing)
+        self:CallMethod("DebugState", newstate, PlayerInCombat(), total, count, missing)
     end
 ]])
-function header:DebugState(state, combatWheel, inCombat, total, count, missing)
-    print(("|cff33ff99PingAltClick|r estado=%s opción=%s combate=%s marcos=%s cambiados=%s sin-ref=%s"):format(
-        tostring(state), tostring(combatWheel), tostring(inCombat), tostring(total), tostring(count), tostring(missing)))
+function header:DebugState(state, inCombat, total, count, missing)
+    print(("|cff33ff99PingAltClick|r estado=%s combate=%s marcos=%s cambiados=%s sin-ref=%s"):format(
+        tostring(state), tostring(inCombat), tostring(total), tostring(count), tostring(missing)))
 end
 RegisterStateDriver(header, "pingalt", stateCondition())
 local wrapped = {}
@@ -284,12 +299,16 @@ end
 
 local scanQueued
 
+local updateUnitClicks
+
 local function queueScan()
     if scanQueued then return end
     scanQueued = true
     C_Timer.After(1, function()
         scanQueued = false
         scanFrames()
+        -- Sin modificador, los marcos nuevos también dejan pasar el botón
+        if updateUnitClicks then updateUnitClicks() end
     end)
 end
 
@@ -305,17 +324,45 @@ local function applyBinding()
     SetOverrideBinding(f, true, bindingKey(), ACTION)
 end
 
--- Modificador pulsado fuera de combate: los clics de los marcos de unidad pasan al mundo
-local function restoreUnitClicks()
-    for frame in pairs(clickDisabled) do
-        clickDisabled[frame] = nil
-        frame:SetMouseClickEnabled(true)
+-- Modificador pulsado fuera de combate: el botón de ping de los marcos de unidad
+-- pasa al mundo. Con SetPassThroughButtons solo pasa ese botón, así que el resto
+-- (p. ej. Alt + clic derecho de Clique) sigue llegando al marco. Si no se puede,
+-- se recurre a desactivar todos los clics del marco.
+local PASS_BUTTONS = { "LeftButton", "RightButton", "MiddleButton", "Button4", "Button5" }
+
+local function setPassThrough(frame, button)
+    if not (frame.SetPassThroughButtons and frame.ShouldButtonPassThrough) then return end
+    local prev, list = {}, {}
+    for _, b in ipairs(PASS_BUTTONS) do
+        if frame:ShouldButtonPassThrough(b) then
+            prev[#prev + 1] = b
+            list[#list + 1] = b
+        end
+    end
+    if frame:ShouldButtonPassThrough(button) then return prev end
+    list[#list + 1] = button
+    if pcall(frame.SetPassThroughButtons, frame, unpack(list)) and frame:ShouldButtonPassThrough(button) then
+        return prev
     end
 end
 
-local function updateUnitClicks()
+local function restoreUnitClicks(keepPermanent)
+    for frame, state in pairs(clickDisabled) do
+        if not (keepPermanent and state ~= true) then
+            clickDisabled[frame] = nil
+            if state == true then
+                frame:SetMouseClickEnabled(true)
+            else
+                pcall(frame.SetPassThroughButtons, frame, unpack(state))
+            end
+        end
+    end
+end
+
+function updateUnitClicks()
     if InCombatLockdown() then return end
-    if not modifiersMatch() then
+    -- Sin modificador (botones 3-5) el botón pasa al mundo siempre
+    if not (noModifier() or modifiersMatch()) then
         restoreUnitClicks()
         return
     end
@@ -324,9 +371,14 @@ local function updateUnitClicks()
         scanFrames()
     end
     for frame in pairs(unitFrames) do
-        if not clickDisabled[frame] and frame:IsMouseClickEnabled() then
-            clickDisabled[frame] = true
-            frame:SetMouseClickEnabled(false)
+        if not clickDisabled[frame] then
+            local prev = setPassThrough(frame, cfg().button)
+            if prev then
+                clickDisabled[frame] = prev
+            elseif not noModifier() and frame:IsMouseClickEnabled() then
+                clickDisabled[frame] = true
+                frame:SetMouseClickEnabled(false)
+            end
         end
     end
 end
@@ -339,9 +391,8 @@ mod:SetScript("OnEvent", function(_, event)
     if event == "PLAYER_REGEN_DISABLED" then
         -- Última ocasión antes del bloqueo de combate. Si el modificador sigue
         -- pulsado, se fuerza al controlador seguro a reevaluar para que tome el relevo.
-        restoreUnitClicks()
-        -- Sincroniza la opción por si el aviso de cambio del panel no llegó
-        header:SetAttribute("combat-wheel", db and db.combatWheel and true or nil)
+        -- Sin modificador, el paso del botón al mundo se queda puesto en combate.
+        restoreUnitClicks(noModifier())
         header:SetAttribute("state-pingalt", "0")
     else
         updateUnitClicks()
@@ -354,7 +405,6 @@ local function applyConfig()
         f:RegisterEvent("PLAYER_REGEN_ENABLED")
         return
     end
-    header:SetAttribute("combat-wheel", cfg().combatWheel and true or nil)
     RegisterStateDriver(header, "pingalt", stateCondition())
     for frame in pairs(wrapped) do
         setFrameConfig(frame)
@@ -370,8 +420,21 @@ local function notifyListeners()
     for _, fn in ipairs(listeners) do fn() end
 end
 
+-- Sin modificador solo con los botones 3-5: si no, se ajusta el otro campo
+local function normalizeConfig(changedKey)
+    if db and db.modifier == "NONE" and NEEDS_MODIFIER[db.button] then
+        if changedKey == "button" then
+            db.modifier = DEFAULTS.modifier
+        else
+            db.button = "Button5"
+        end
+        print("|cff33ff99PingAltClick|r " .. L.NONE_ADJUSTED:format(comboText()))
+    end
+end
+
 local warnedCombat
-local function onConfigChanged()
+local function onConfigChanged(changedKey)
+    normalizeConfig(changedKey)
     if InCombatLockdown() then
         if not warnedCombat then
             warnedCombat = true
@@ -394,7 +457,7 @@ local function setOption(key, value)
     if db[key] ~= value then
         db[key] = value
     end
-    onConfigChanged()
+    onConfigChanged(key)
 end
 
 local function isValid(list, value)
@@ -409,7 +472,7 @@ local function bindingConflict()
     local action = GetBindingAction(key)
     if action and action ~= "" and action ~= ACTION then
         local name = _G["BINDING_NAME_" .. action] or action
-        return L.CONFLICT:format(modifierText(cfg().modifier) .. " + " .. L[cfg().button]:lower(), name)
+        return L.CONFLICT:format(comboText(), name)
     end
 end
 
@@ -420,7 +483,7 @@ local function setupOptions()
 
     local function onChanged(key)
         return function()
-            onConfigChanged()
+            onConfigChanged(key)
         end
     end
     local function watch(setting, variable, key)
@@ -432,29 +495,23 @@ local function setupOptions()
     end
 
     local CreateDropdown = Settings.CreateDropdown or Settings.CreateDropDown
-    if CreateDropdown and Settings.CreateControlTextContainer then
-        local function dropdown(variable, key, values, label, tooltip, textFn)
-            local setting = Settings.RegisterAddOnSetting(category, variable, key, db,
-                VarType.String or "string", label, DEFAULTS[key])
-            CreateDropdown(category, setting, function()
-                local container = Settings.CreateControlTextContainer()
-                for _, v in ipairs(values) do
-                    container:Add(v, textFn(v))
-                end
-                return container:GetData()
-            end, tooltip)
-            watch(setting, variable, key)
-            settings[key] = setting
-        end
-        dropdown("PingAltClick_Modifier", "modifier", MODIFIERS, L.MODIFIER, L.MODIFIER_TOOLTIP, modifierText)
-        dropdown("PingAltClick_Button", "button", BUTTONS, L.BUTTON, L.BUTTON_TOOLTIP, function(v) return L[v] end)
+    local function dropdown(variable, key, values, label, tooltip, textFn, varType)
+        if not (CreateDropdown and Settings.CreateControlTextContainer) then return end
+        local setting = Settings.RegisterAddOnSetting(category, variable, key, db,
+            varType or VarType.String or "string", label, DEFAULTS[key])
+        CreateDropdown(category, setting, function()
+            local container = Settings.CreateControlTextContainer()
+            for _, v in ipairs(values) do
+                container:Add(v, textFn(v))
+            end
+            return container:GetData()
+        end, tooltip)
+        watch(setting, variable, key)
+        settings[key] = setting
     end
+    dropdown("PingAltClick_Modifier", "modifier", MODIFIERS, L.MODIFIER, L.MODIFIER_TOOLTIP, modifierText)
+    dropdown("PingAltClick_Button", "button", BUTTONS, L.BUTTON, L.BUTTON_TOOLTIP, function(v) return L[v] end)
 
-    local setting = Settings.RegisterAddOnSetting(category, "PingAltClick_CombatWheel", "combatWheel",
-        db, VarType.Boolean or "boolean", L.COMBAT_WHEEL, DEFAULTS.combatWheel)
-    Settings.CreateCheckbox(category, setting, L.COMBAT_WHEEL_TOOLTIP)
-    watch(setting, "PingAltClick_CombatWheel", "combatWheel")
-    settings.combatWheel = setting
 
     Settings.RegisterAddOnCategory(category)
 end
@@ -505,7 +562,7 @@ local function createWindow()
         local close = CreateFrame("Button", nil, w, "UIPanelCloseButton")
         close:SetPoint("TOPRIGHT", -4, -4)
     end
-    w:SetSize(320, 250)
+    w:SetSize(380, 210)
     w:SetPoint("CENTER")
     w:SetFrameStrata("DIALOG")
     w:SetClampedToScreen(true)
@@ -533,23 +590,6 @@ local function createWindow()
     w.modifier = row(L.MODIFIER, "PingAltClickModifierDropdown", MODIFIERS, modifierText, "modifier")
     w.button = row(L.BUTTON, "PingAltClickButtonDropdown", BUTTONS, function(v) return L[v] end, "button")
 
-    local check = CreateFrame("CheckButton", nil, w, "UICheckButtonTemplate")
-    check:SetPoint("TOPLEFT", 16, y)
-    local checkText = check.Text or check.text or w:CreateFontString(nil, "OVERLAY", "GameFontHighlight")
-    if not (check.Text or check.text) then checkText:SetPoint("LEFT", check, "RIGHT", 2, 0) end
-    checkText:SetText(L.COMBAT_WHEEL)
-    check:SetScript("OnClick", function(self)
-        setOption("combatWheel", self:GetChecked() and true or false)
-    end)
-    check:SetScript("OnEnter", function(self)
-        GameTooltip:SetOwner(self, "ANCHOR_RIGHT")
-        GameTooltip:SetText(L.COMBAT_WHEEL, 1, 1, 1)
-        GameTooltip:AddLine(L.COMBAT_WHEEL_TOOLTIP, nil, nil, nil, true)
-        GameTooltip:Show()
-    end)
-    check:SetScript("OnLeave", GameTooltip_Hide)
-    w.combatWheel = check
-    y = y - 36
 
     local current = w:CreateFontString(nil, "OVERLAY", "GameFontNormal")
     current:SetPoint("TOPLEFT", 20, y)
@@ -574,7 +614,6 @@ local function createWindow()
     function w:Refresh()
         self.modifier.Refresh()
         self.button.Refresh()
-        self.combatWheel:SetChecked(cfg().combatWheel)
         self.current:SetText(L.CURRENT:format(comboText()))
         self.warning:SetText(bindingConflict() or "")
     end
@@ -592,12 +631,16 @@ end
 
 -- /pingac ctrl left, /pingac alt+shift der, /pingac reset
 local BUTTON_ALIASES = {
+    middle = "MiddleButton", mid = "MiddleButton", central = "MiddleButton", ["3"] = "MiddleButton", m3 = "MiddleButton", button3 = "MiddleButton", mouse3 = "MiddleButton",
+    ["4"] = "Button4", m4 = "Button4", button4 = "Button4", mouse4 = "Button4",
+    ["5"] = "Button5", m5 = "Button5", button5 = "Button5", mouse5 = "Button5",
     left = "LeftButton", l = "LeftButton", lmb = "LeftButton", izq = "LeftButton", izquierdo = "LeftButton", i = "LeftButton",
     right = "RightButton", r = "RightButton", rmb = "RightButton", der = "RightButton", derecho = "RightButton", d = "RightButton",
 }
 local MOD_ALIASES = { alt = "ALT", ctrl = "CTRL", control = "CTRL", shift = "SHIFT", mayus = "SHIFT", ["mayús"] = "SHIFT" }
 
 local function parseModifier(token)
+    if token == "none" or token == "ninguno" or token == "no" then return "NONE" end
     local have = {}
     for part in token:gmatch("[^%+%-]+") do
         local m = MOD_ALIASES[part]
@@ -677,6 +720,10 @@ f:SetScript("OnEvent", function(self, event)
         end
         if not isValid(MODIFIERS, db.modifier) then db.modifier = DEFAULTS.modifier end
         if not isValid(BUTTONS, db.button) then db.button = DEFAULTS.button end
+        -- opciones retiradas en 2.6
+        db.combatWheel = nil
+        db.markOnAttack = nil
+        if db.modifier == "NONE" and NEEDS_MODIFIER[db.button] then db.modifier = DEFAULTS.modifier end
         setupOptions()
         applyAll()
         applyConfig()
@@ -710,9 +757,7 @@ SlashCmdList.PINGALTCLICK = function(msg)
     print("  " .. key .. " -> " .. tostring(GetBindingAction(key, true)) .. " (" .. stateCondition() .. ")")
     print("  pingMode = " .. tostring(GetCVar("pingMode")) .. ", enablePings = " .. tostring(GetCVar("enablePings")))
     print("  Tecla de ping actual: " .. tostring(GetBindingKey(ACTION)))
-    print(("  Igual en combate: opción=%s, aplicada=%s, en combate=%s"):format(
-        tostring(db and db.combatWheel), tostring(header:GetAttribute("combat-wheel")),
-        tostring(InCombatLockdown())))
+    print("  En combate: " .. tostring(InCombatLockdown()))
     local count = 0
     for _ in pairs(wrapped) do count = count + 1 end
     print("  Marcos enganchados: " .. count .. ", marcos de unidad (combate): " .. tostring(header:GetAttribute("nunits")))
@@ -726,8 +771,9 @@ SlashCmdList.PINGALTCLICK = function(msg)
             tostring(frame.IsMouseClickEnabled and frame:IsMouseClickEnabled()),
             tostring(frame.IsProtected and frame:IsProtected()))
         if frame.GetAttribute then
-            line = line .. (" enganchado=%s ping-receiver=%s type=%s *type1=%s"):format(
+            line = line .. (" enganchado=%s pasa-botón=%s ping-receiver=%s type=%s *type1=%s"):format(
                 tostring(wrapped[frame] ~= nil),
+                tostring(frame.ShouldButtonPassThrough and frame:ShouldButtonPassThrough(cfg().button)),
                 tostring(frame:GetAttribute("ping-receiver")),
                 tostring(frame:GetAttribute("type")),
                 tostring(frame:GetAttribute("*type1")))

@@ -1,7 +1,7 @@
 ## Interface: 16001
 ## Title: PingAltClick
-## Notes: Modificador + clic (Alt + clic izquierdo por defecto, configurable con /pingac) usa el sistema de pings normal (clic = ping contextual, mantener = rueda)
-## Version: 2.5
+## Notes: Modificador + clic (Alt + clic izquierdo por defecto, configurable en Opciones o con /pingac) usa el sistema de pings normal (clic = ping contextual, mantener = rueda)
+## Version: 2.6
 ## IconTexture: Interface\AddOns\PingAltClick\icon
 ## Author: Rybun
 ## X-License: MIT
